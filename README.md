@@ -69,10 +69,3 @@ Ce projet inclut des correctifs importants pour la bibliothèque `react-native-i
 
 ---
 
-## 🌐 Serveurs Gratuits 24/24 (Recommandations 2026)
-
-Si vous souhaitez étendre l'application avec un backend (profils, cloud), voici les meilleures options :
-
-1. **Oracle Cloud Free Tier** : Offre la meilleure puissance gratuite à vie (ARM Ampere).
-2. **Google Cloud Platform (GCP)** : Instance `e2-micro` gratuite à vie.
-3. **AWS Free Tier** : 12 mois gratuits pour des instances micro.
