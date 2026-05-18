@@ -1,4 +1,5 @@
 import { BleManager, Device } from 'react-native-ble-plx';
+// @ts-ignore
 import IRManager from 'react-native-ir-manager';
 import { Platform, PermissionsAndroid } from 'react-native';
 
@@ -9,10 +10,10 @@ export enum ConnectionMode {
   IR = 'IR',
   BT = 'BT'
 }
-
 class RemoteService {
   private bleManager: BleManager;
   private connectedDevice: Device | null = null;
+  private scanning = false;
 
   constructor() {
     this.bleManager = new BleManager();
@@ -58,17 +59,37 @@ class RemoteService {
   // --- Logique Bluetooth ---
 
   /**
+   * Arrête le scan en cours proprement et attend que la pile Bluetooth se stabilise.
+   */
+  async stopScan(): Promise<void> {
+    if (this.scanning) {
+      console.log('Arrêt du scan Bluetooth...');
+      this.bleManager.stopDeviceScan();
+      this.scanning = false;
+      // Temps de stabilisation indispensable pour éviter les collisions sur la pile BLE (iOS/Android)
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 500));
+    } else {
+      // Sécurité : force l'arrêt du scan natif
+      this.bleManager.stopDeviceScan();
+    }
+  }
+
+  /**
    * Scanne les appareils Bluetooth à proximité et tente une connexion.
    */
   async scanAndConnect(onDeviceFound?: (device: Device) => void): Promise<void> {
+    if (this.scanning) {
+      console.log('Scan Bluetooth déjà en cours, ignoré.');
+      return;
+    }
+
     console.log('Démarrage du scan Bluetooth...');
-    
-    // On arrête tout scan en cours avant d'en lancer un nouveau
-    this.bleManager.stopDeviceScan();
+    this.scanning = true;
 
     this.bleManager.startDeviceScan(null, null, (error, device) => {
       if (error) {
-        // On ignore l'erreur d'annulation de scan qui est normale
+        this.scanning = false;
+        // On ignore l'erreur d'annulation de scan qui est normale (errorCode === 2)
         if (error.errorCode !== 2) {
             console.error('Erreur de scan:', error);
         }
@@ -101,8 +122,10 @@ class RemoteService {
         }
       }
 
-      this.bleManager.stopDeviceScan();
+      // Arrête le scan et attend que la pile Bluetooth se stabilise avant de connecter
+      await this.stopScan();
       
+      console.log(`Tentative de connexion à ${device.name || device.localName || device.id}...`);
       const connected = await device.connect();
       const discovered = await connected.discoverAllServicesAndCharacteristics();
       this.connectedDevice = discovered;
@@ -117,6 +140,28 @@ class RemoteService {
       console.error('La connexion a échoué', e);
       return false;
     }
+  }
+
+  /**
+   * Se déconnecte de l'appareil Bluetooth actuellement connecté.
+   */
+  async disconnectDevice(): Promise<void> {
+    if (this.connectedDevice) {
+      console.log(`Déconnexion de ${this.connectedDevice.name || this.connectedDevice.id}...`);
+      try {
+        await this.connectedDevice.cancelConnection();
+      } catch (e) {
+        console.error('Erreur lors de la déconnexion:', e);
+      }
+      this.connectedDevice = null;
+    }
+  }
+
+  /**
+   * Retourne l'appareil actuellement connecté.
+   */
+  getConnectedDevice(): Device | null {
+    return this.connectedDevice;
   }
 
   /**

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -48,7 +48,11 @@ const App = () => {
   const [isIRSupported, setIsIRSupported] = useState<boolean | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
   const [connectedDeviceName, setConnectedDeviceName] = useState<string | null>(null);
+
+  const isScanningRef = useRef(false);
+  const scanTimeoutRef = useRef<any>(null);
 
   useEffect(() => {
     const checkSupport = async () => {
@@ -67,7 +71,13 @@ const App = () => {
     
     // Délai pour s'assurer que l'activité est attachée
     const timer = setTimeout(checkSupport, 1000);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      if (scanTimeoutRef.current) {
+        clearTimeout(scanTimeoutRef.current);
+      }
+      RemoteService.stopScan();
+    };
   }, []);
 
   /**
@@ -98,8 +108,18 @@ const App = () => {
    * Démarre un scan pour trouver des appareils Bluetooth.
    */
   const startScan = async () => {
+    if (isScanningRef.current) {
+      console.log("Un scan est déjà en cours d'exécution.");
+      return;
+    }
+
+    isScanningRef.current = true;
     setDevices([]); // Réinitialise la liste
     setIsScanning(true);
+
+    if (scanTimeoutRef.current) {
+      clearTimeout(scanTimeoutRef.current);
+    }
     
     await RemoteService.scanAndConnect((device) => {
       setDevices((prevDevices) => {
@@ -113,20 +133,44 @@ const App = () => {
     });
 
     // Arrête le scan après 10 secondes
-    setTimeout(() => setIsScanning(false), 10000);
+    scanTimeoutRef.current = setTimeout(async () => {
+      await RemoteService.stopScan();
+      setIsScanning(false);
+      isScanningRef.current = false;
+      scanTimeoutRef.current = null;
+    }, 10000);
   };
 
   /**
    * Tente de se connecter à un appareil sélectionné.
    */
   const handleConnect = async (device: Device) => {
+    // Si un scan est en cours, on l'arrête au niveau de l'interface
+    if (scanTimeoutRef.current) {
+      clearTimeout(scanTimeoutRef.current);
+      scanTimeoutRef.current = null;
+    }
+    setIsScanning(false);
+    isScanningRef.current = false;
+
     const success = await RemoteService.connectToDevice(device);
     if (success) {
+      setConnectedDevice(device);
       setConnectedDeviceName(device.name || device.localName || 'Appareil Inconnu');
       Alert.alert('Succès', `Connecté à ${device.name || device.localName}`);
     } else {
       Alert.alert('Erreur', 'Impossible de se connecter à cet appareil');
     }
+  };
+
+  /**
+   * Se déconnecte de l'appareil Bluetooth actuellement connecté.
+   */
+  const handleDisconnect = async () => {
+    await RemoteService.disconnectDevice();
+    setConnectedDevice(null);
+    setConnectedDeviceName(null);
+    Alert.alert('Déconnexion', 'Appareil déconnecté avec succès.');
   };
 
   return (
@@ -170,24 +214,46 @@ const App = () => {
               <Text style={styles.scanText}>{isScanning ? 'Recherche en cours...' : 'Rechercher des appareils'}</Text>
             </TouchableOpacity>
 
+            {/* Appareil actuellement connecté */}
+            {connectedDevice && (
+              <View style={styles.connectedDeviceCard}>
+                <View style={styles.connectedHeader}>
+                  <View style={styles.pulseDot} />
+                  <Text style={styles.connectedTitle}>Appareil connecté</Text>
+                </View>
+                <View style={styles.connectedBody}>
+                  <Tv size={24} color="#34C759" />
+                  <View style={styles.connectedInfo}>
+                    <Text style={styles.connectedName}>{connectedDevice.name || connectedDevice.localName || 'Appareil Inconnu'}</Text>
+                    <Text style={styles.connectedId}>{connectedDevice.id}</Text>
+                  </View>
+                  <TouchableOpacity style={styles.disconnectBtn} onPress={handleDisconnect}>
+                    <Text style={styles.disconnectBtnText}>Déconnecter</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
             {/* Liste des appareils trouvés */}
-            {devices.length > 0 && (
+            {devices.filter(d => !connectedDevice || d.id !== connectedDevice.id).length > 0 && (
               <View style={styles.deviceList}>
                 <Text style={styles.listTitle}>Appareils TV détectés :</Text>
-                {devices.map((device) => (
-                  <TouchableOpacity 
-                    key={device.id} 
-                    style={styles.deviceItem}
-                    onPress={() => handleConnect(device)}
-                  >
-                    <Tv size={20} color="#007AFF" />
-                    <View style={styles.deviceInfo}>
-                      <Text style={styles.deviceName}>{device.name || device.localName || 'Inconnu'}</Text>
-                      <Text style={styles.deviceId}>{device.id}</Text>
-                    </View>
-                    <Text style={styles.connectLabel}>Connecter</Text>
-                  </TouchableOpacity>
-                ))}
+                {devices
+                  .filter(d => !connectedDevice || d.id !== connectedDevice.id)
+                  .map((device) => (
+                    <TouchableOpacity 
+                      key={device.id} 
+                      style={styles.deviceItem}
+                      onPress={() => handleConnect(device)}
+                    >
+                      <Tv size={20} color="#007AFF" />
+                      <View style={styles.deviceInfo}>
+                        <Text style={styles.deviceName}>{device.name || device.localName || 'Inconnu'}</Text>
+                        <Text style={styles.deviceId}>{device.id}</Text>
+                      </View>
+                      <Text style={styles.connectLabel}>Connecter</Text>
+                    </TouchableOpacity>
+                  ))}
               </View>
             )}
           </View>
@@ -304,6 +370,62 @@ const styles = StyleSheet.create({
   },
   bluetoothSection: {
     marginBottom: 10,
+  },
+  connectedDeviceCard: {
+    backgroundColor: '#1E1E1E',
+    marginHorizontal: 20,
+    marginBottom: 15,
+    borderRadius: 12,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: '#34C759',
+  },
+  connectedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    gap: 8,
+  },
+  pulseDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#34C759',
+  },
+  connectedTitle: {
+    color: '#34C759',
+    fontSize: 12,
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  connectedBody: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  connectedInfo: {
+    flex: 1,
+    marginLeft: 15,
+  },
+  connectedName: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  connectedId: {
+    color: '#888',
+    fontSize: 12,
+  },
+  disconnectBtn: {
+    backgroundColor: '#FF3B30',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  disconnectBtnText: {
+    color: 'white',
+    fontWeight: '600',
+    fontSize: 12,
   },
   scanBar: {
     flexDirection: 'row',
