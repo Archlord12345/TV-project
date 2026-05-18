@@ -27,11 +27,22 @@ class RemoteService {
     if (Platform.OS !== 'android') return true;
 
     try {
-      const permissions = [
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-      ];
+      const apiLevel = Platform.Version as number;
+      let permissions = [];
+
+      if (apiLevel >= 31) {
+        // Android 12+ nécessite ces permissions spécifiques pour le Bluetooth
+        permissions = [
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        ];
+      } else {
+        // Versions antérieures
+        permissions = [
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        ];
+      }
 
       const granted = await PermissionsAndroid.requestMultiple(permissions);
       
