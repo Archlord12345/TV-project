@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-  SafeAreaView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
   StatusBar,
-  Dimensions,
+  ScrollView,
+  Alert,
+  FlatList,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Device } from 'react-native-ble-plx';
 import { 
   Power, 
   Volume2, 
@@ -20,15 +23,18 @@ import {
   ArrowLeft,
   Menu,
   Bluetooth,
-  Radio
+  RefreshCcw,
+  Zap,
+  Tv
 } from 'lucide-react-native';
-import RemoteService from './src/services/RemoteService';
+import RemoteService, { ConnectionMode } from './src/services/RemoteService';
 
-const { width } = Dimensions.get('window');
-
-const RemoteButton = ({ icon: Icon, label, onPress, color = '#333', size = 24 }: any) => (
+/**
+ * Composant réutilisable pour les boutons de la télécommande.
+ */
+const RemoteButton = ({ icon: Icon, label, onPress, color = '#333', size = 28, style }: any) => (
   <TouchableOpacity 
-    style={[styles.button, { backgroundColor: color }]} 
+    style={[styles.button, { backgroundColor: color }, style]} 
     onPress={onPress}
     activeOpacity={0.7}
   >
@@ -38,112 +44,213 @@ const RemoteButton = ({ icon: Icon, label, onPress, color = '#333', size = 24 }:
 );
 
 const App = () => {
-  const [connectionMode, setConnectionMode] = useState<'IR' | 'BT'>('IR');
+  const [mode, setMode] = useState<ConnectionMode>(ConnectionMode.IR);
+  const [isIRSupported, setIsIRSupported] = useState<boolean | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [connectedDeviceName, setConnectedDeviceName] = useState<string | null>(null);
 
-  const handlePress = async (command: string) => {
-    console.log(`Sending ${command} via ${connectionMode}`);
+  useEffect(() => {
+    const checkSupport = async () => {
+      try {
+        const hasPermission = await RemoteService.requestPermissions();
+        if (!hasPermission) {
+          console.warn('Permissions non accordées');
+          return;
+        }
+        const supported = await RemoteService.checkIRSupport();
+        setIsIRSupported(supported);
+      } catch (e) {
+        console.error("Erreur d'initialisation :", e);
+      }
+    };
     
-    if (connectionMode === 'IR') {
-      const pattern = RemoteService.getSamsungPowerCode(); // Exemple
-      await RemoteService.sendIRCommand(pattern);
+    // Délai pour s'assurer que l'activité est attachée
+    const timer = setTimeout(checkSupport, 1000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  /**
+   * Gère l'envoi d'une commande selon le mode sélectionné (IR ou BT).
+   */
+  const handleCommand = async (command: string) => {
+    console.log(`Envoi de la commande ${command} via ${mode}`);
+    if (mode === ConnectionMode.IR) {
+      await RemoteService.sendIRCommand(command);
     } else {
+      if (!connectedDeviceName) {
+        Alert.alert('Non connecté', 'Veuillez d\'abord vous connecter à une TV Bluetooth.');
+        return;
+      }
       await RemoteService.sendBluetoothCommand(command);
     }
   };
 
-  React.useEffect(() => {
-    const init = async () => {
-      if (connectionMode === 'BT') {
-        const hasPermission = await RemoteService.requestBluetoothPermissions();
-        if (hasPermission) {
-          RemoteService.scanAndConnect();
+  /**
+   * Démarre un scan pour trouver des appareils Bluetooth.
+   */
+  const startScan = async () => {
+    setDevices([]); // Réinitialise la liste
+    setIsScanning(true);
+    
+    await RemoteService.scanAndConnect((device) => {
+      setDevices((prevDevices) => {
+        // Éviter les doublons
+        const exists = prevDevices.find((d) => d.id === device.id);
+        if (!exists) {
+          return [...prevDevices, device];
         }
-      }
-    };
-    init();
-  }, [connectionMode]);
+        return prevDevices;
+      });
+    });
+
+    // Arrête le scan après 10 secondes
+    setTimeout(() => setIsScanning(false), 10000);
+  };
+
+  /**
+   * Tente de se connecter à un appareil sélectionné.
+   */
+  const handleConnect = async (device: Device) => {
+    const success = await RemoteService.connectToDevice(device);
+    if (success) {
+      setConnectedDeviceName(device.name || device.localName || 'Appareil Inconnu');
+      Alert.alert('Succès', `Connecté à ${device.name || device.localName}`);
+    } else {
+      Alert.alert('Erreur', 'Impossible de se connecter à cet appareil');
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
       
-      {/* Header / Status */}
+      {/* En-tête */}
       <View style={styles.header}>
-        <Text style={styles.title}>Smart Remote</Text>
-        <View style={styles.modeSelector}>
+        <View>
+          <Text style={styles.title}>Télécommande Universelle</Text>
+          <Text style={styles.subtitle}>
+            {mode === ConnectionMode.IR ? 'Mode Infrarouge' : 'Mode Bluetooth'}
+            {connectedDeviceName && ` - Connecté à ${connectedDeviceName}`}
+            {isIRSupported === false && mode === ConnectionMode.IR && ' (Appareil non compatible)'}
+          </Text>
+        </View>
+        
+        <View style={styles.modeToggle}>
           <TouchableOpacity 
-            onPress={() => setConnectionMode('IR')}
-            style={[styles.modeButton, connectionMode === 'IR' && styles.activeMode]}
+            onPress={() => setMode(ConnectionMode.IR)}
+            style={[styles.modeBtn, mode === ConnectionMode.IR && styles.activeMode]}
           >
-            <Radio size={16} color={connectionMode === 'IR' ? 'white' : '#888'} />
-            <Text style={[styles.modeText, connectionMode === 'IR' && styles.activeModeText]}>IR</Text>
+            <Zap size={18} color={mode === ConnectionMode.IR ? 'white' : '#888'} />
           </TouchableOpacity>
           <TouchableOpacity 
-            onPress={() => setConnectionMode('BT')}
-            style={[styles.modeButton, connectionMode === 'BT' && styles.activeMode]}
+            onPress={() => setMode(ConnectionMode.BT)}
+            style={[styles.modeBtn, mode === ConnectionMode.BT && styles.activeMode]}
           >
-            <Bluetooth size={16} color={connectionMode === 'BT' ? 'white' : '#888'} />
-            <Text style={[styles.modeText, connectionMode === 'BT' && styles.activeModeText]}>BT</Text>
+            <Bluetooth size={18} color={mode === ConnectionMode.BT ? 'white' : '#888'} />
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Power & Top Buttons */}
-      <View style={styles.topSection}>
-        <RemoteButton icon={Power} color="#FF3B30" onPress={() => handlePress('POWER')} size={32} />
-      </View>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        
+        {/* État de connexion / Scan Bluetooth */}
+        {mode === ConnectionMode.BT && (
+          <View style={styles.bluetoothSection}>
+            <TouchableOpacity style={styles.scanBar} onPress={startScan} disabled={isScanning}>
+              <RefreshCcw size={16} color="white" />
+              <Text style={styles.scanText}>{isScanning ? 'Recherche en cours...' : 'Rechercher des appareils'}</Text>
+            </TouchableOpacity>
 
-      {/* Navigation Pad */}
-      <View style={styles.navSection}>
-        <View style={styles.navPad}>
-          <TouchableOpacity style={styles.navUp} onPress={() => handlePress('UP')}>
-            <ChevronUp color="white" size={32} />
-          </TouchableOpacity>
-          <View style={styles.navMiddle}>
-            <TouchableOpacity style={styles.navLeft} onPress={() => handlePress('LEFT')}>
-              <ChevronLeft color="white" size={32} />
+            {/* Liste des appareils trouvés */}
+            {devices.length > 0 && (
+              <View style={styles.deviceList}>
+                <Text style={styles.listTitle}>Appareils TV détectés :</Text>
+                {devices.map((device) => (
+                  <TouchableOpacity 
+                    key={device.id} 
+                    style={styles.deviceItem}
+                    onPress={() => handleConnect(device)}
+                  >
+                    <Tv size={20} color="#007AFF" />
+                    <View style={styles.deviceInfo}>
+                      <Text style={styles.deviceName}>{device.name || device.localName || 'Inconnu'}</Text>
+                      <Text style={styles.deviceId}>{device.id}</Text>
+                    </View>
+                    <Text style={styles.connectLabel}>Connecter</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* Commandes du haut */}
+        <View style={styles.topRow}>
+          <RemoteButton icon={Power} color="#FF3B30" onPress={() => handleCommand('POWER')} size={36} />
+          <RemoteButton icon={Menu} color="#444" onPress={() => handleCommand('MENU')} />
+        </View>
+
+        {/* Pavé directionnel */}
+        <View style={styles.navContainer}>
+          <View style={styles.navPad}>
+            <TouchableOpacity style={styles.navBtn} onPress={() => handleCommand('UP')}>
+              <ChevronUp color="white" size={40} />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.navOk} onPress={() => handlePress('OK')}>
-              <Text style={styles.okText}>OK</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.navRight} onPress={() => handlePress('RIGHT')}>
-              <ChevronRight color="white" size={32} />
+            
+            <View style={styles.navRow}>
+              <TouchableOpacity style={styles.navBtn} onPress={() => handleCommand('LEFT')}>
+                <ChevronLeft color="white" size={40} />
+              </TouchableOpacity>
+              
+              <TouchableOpacity style={styles.okBtn} onPress={() => handleCommand('OK')}>
+                <Text style={styles.okText}>OK</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity style={styles.navBtn} onPress={() => handleCommand('RIGHT')}>
+                <ChevronRight color="white" size={40} />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity style={styles.navBtn} onPress={() => handleCommand('DOWN')}>
+              <ChevronDown color="white" size={40} />
             </TouchableOpacity>
           </View>
-          <TouchableOpacity style={styles.navDown} onPress={() => handlePress('DOWN')}>
-            <ChevronDown color="white" size={32} />
-          </TouchableOpacity>
         </View>
-      </View>
 
-      {/* Controls Section */}
-      <View style={styles.controlsSection}>
-        <View style={styles.controlRow}>
+        {/* Section principale des contrôles */}
+        <View style={styles.controlsGrid}>
+          {/* Colonne Volume */}
           <View style={styles.verticalControl}>
-            <TouchableOpacity onPress={() => handlePress('VOL_UP')}><ChevronUp color="white" /></TouchableOpacity>
-            <Text style={styles.controlLabel}>VOL</Text>
-            <TouchableOpacity onPress={() => handlePress('VOL_DOWN')}><ChevronDown color="white" /></TouchableOpacity>
-          </View>
-          
-          <View style={styles.centerControls}>
-            <RemoteButton icon={VolumeX} onPress={() => handlePress('MUTE')} />
-            <RemoteButton icon={Home} onPress={() => handlePress('HOME')} />
+            <TouchableOpacity onPress={() => handleCommand('VOL_UP')} style={styles.vertBtn}>
+              <ChevronUp color="white" size={32} />
+            </TouchableOpacity>
+            <Text style={styles.vertLabel}>VOL</Text>
+            <TouchableOpacity onPress={() => handleCommand('VOL_DOWN')} style={styles.vertBtn}>
+              <ChevronDown color="white" size={32} />
+            </TouchableOpacity>
           </View>
 
+          {/* Colonne du milieu */}
+          <View style={styles.centerCol}>
+            <RemoteButton icon={Home} onPress={() => handleCommand('HOME')} color="#007AFF" />
+            <RemoteButton icon={VolumeX} onPress={() => handleCommand('MUTE')} color="#444" />
+            <RemoteButton icon={ArrowLeft} onPress={() => handleCommand('BACK')} color="#444" />
+          </View>
+
+          {/* Colonne Chaîne */}
           <View style={styles.verticalControl}>
-            <TouchableOpacity onPress={() => handlePress('CH_UP')}><ChevronUp color="white" /></TouchableOpacity>
-            <Text style={styles.controlLabel}>CH</Text>
-            <TouchableOpacity onPress={() => handlePress('CH_DOWN')}><ChevronDown color="white" /></TouchableOpacity>
+            <TouchableOpacity onPress={() => handleCommand('CH_UP')} style={styles.vertBtn}>
+              <ChevronUp color="white" size={32} />
+            </TouchableOpacity>
+            <Text style={styles.vertLabel}>CH</Text>
+            <TouchableOpacity onPress={() => handleCommand('CH_DOWN')} style={styles.vertBtn}>
+              <ChevronDown color="white" size={32} />
+            </TouchableOpacity>
           </View>
         </View>
-      </View>
 
-      {/* Bottom Menu */}
-      <View style={styles.bottomSection}>
-        <RemoteButton icon={ArrowLeft} label="Back" onPress={() => handlePress('BACK')} />
-        <RemoteButton icon={Menu} label="Menu" onPress={() => handlePress('MENU')} />
-      </View>
-
+      </ScrollView>
     </SafeAreaView>
   );
 };
@@ -151,135 +258,196 @@ const App = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1A1A1A',
+    backgroundColor: '#121212',
+  },
+  scrollContent: {
+    paddingBottom: 40,
   },
   header: {
-    padding: 20,
+    padding: 24,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#222',
   },
   title: {
     color: 'white',
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: 'bold',
   },
-  modeSelector: {
+  subtitle: {
+    color: '#888',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  modeToggle: {
     flexDirection: 'row',
-    backgroundColor: '#333',
-    borderRadius: 20,
+    backgroundColor: '#222',
+    borderRadius: 25,
     padding: 4,
   },
-  modeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
+  modeBtn: {
+    padding: 10,
+    borderRadius: 20,
   },
   activeMode: {
     backgroundColor: '#007AFF',
   },
-  modeText: {
-    color: '#888',
-    marginLeft: 4,
-    fontSize: 12,
+  bluetoothSection: {
+    marginBottom: 10,
+  },
+  scanBar: {
+    flexDirection: 'row',
+    backgroundColor: '#007AFF',
+    margin: 20,
+    marginBottom: 10,
+    padding: 12,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+  },
+  scanText: {
+    color: 'white',
     fontWeight: '600',
   },
-  activeModeText: {
-    color: 'white',
+  deviceList: {
+    backgroundColor: '#1E1E1E',
+    marginHorizontal: 20,
+    borderRadius: 12,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: '#333',
   },
-  topSection: {
+  listTitle: {
+    color: '#888',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  deviceItem: {
+    flexDirection: 'row',
     alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333',
+  },
+  deviceInfo: {
+    flex: 1,
+    marginLeft: 15,
+  },
+  deviceName: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  deviceId: {
+    color: '#666',
+    fontSize: 12,
+  },
+  connectLabel: {
+    color: '#007AFF',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  topRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 40,
     paddingVertical: 20,
   },
-  navSection: {
+  navContainer: {
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 30,
+    marginVertical: 20,
   },
   navPad: {
-    width: 220,
-    height: 220,
-    backgroundColor: '#333',
-    borderRadius: 110,
-    justifyContent: 'center',
+    width: 240,
+    height: 240,
+    backgroundColor: '#1E1E1E',
+    borderRadius: 120,
+    justifyContent: 'space-between',
     alignItems: 'center',
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#333',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 8,
   },
-  navUp: { position: 'absolute', top: 15 },
-  navDown: { position: 'absolute', bottom: 15 },
-  navLeft: { position: 'absolute', left: 15 },
-  navRight: { position: 'absolute', right: 15 },
-  navMiddle: {
+  navRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+  },
+  navBtn: {
+    padding: 15,
+  },
+  okBtn: {
     width: 80,
     height: 80,
+    backgroundColor: '#2A2A2A',
+    borderRadius: 40,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  navOk: {
-    width: 70,
-    height: 70,
-    backgroundColor: '#444',
-    borderRadius: 35,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#555',
+    borderWidth: 2,
+    borderColor: '#444',
   },
   okText: {
     color: 'white',
     fontWeight: 'bold',
-    fontSize: 18,
+    fontSize: 20,
   },
-  controlsSection: {
-    paddingHorizontal: 30,
-    paddingVertical: 20,
-  },
-  controlRow: {
+  controlsGrid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    paddingHorizontal: 30,
+    marginTop: 20,
   },
   verticalControl: {
-    backgroundColor: '#333',
-    borderRadius: 30,
-    paddingVertical: 15,
-    paddingHorizontal: 10,
-    alignItems: 'center',
-    height: 120,
+    backgroundColor: '#1E1E1E',
+    borderRadius: 40,
+    width: 70,
+    height: 180,
     justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#333',
   },
-  controlLabel: {
+  vertBtn: {
+    padding: 10,
+  },
+  vertLabel: {
     color: '#888',
-    fontSize: 12,
     fontWeight: 'bold',
+    fontSize: 14,
   },
-  centerControls: {
-    flexDirection: 'row',
-    gap: 15,
+  centerCol: {
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    height: 180,
   },
   button: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 5,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
   },
   buttonText: {
     color: 'white',
     fontSize: 10,
     marginTop: 4,
-  },
-  bottomSection: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 40,
-    paddingVertical: 20,
   },
 });
 
