@@ -75,14 +75,22 @@ const App = () => {
    */
   const handleCommand = async (command: string) => {
     console.log(`Envoi de la commande ${command} via ${mode}`);
-    if (mode === ConnectionMode.IR) {
-      await RemoteService.sendIRCommand(command);
-    } else {
-      if (!connectedDeviceName) {
-        Alert.alert('Non connecté', 'Veuillez d\'abord vous connecter à une TV Bluetooth.');
-        return;
-      }
-      await RemoteService.sendBluetoothCommand(command);
+    try {
+        if (mode === ConnectionMode.IR) {
+          await RemoteService.sendIRCommand(command);
+        } else {
+          if (!connectedDeviceName) {
+            Alert.alert('Non connecté', 'Veuillez d\'abord vous connecter à une TV Bluetooth.');
+            return;
+          }
+          await RemoteService.sendBluetoothCommand(command);
+        }
+    } catch (e: any) {
+        if (e.message?.includes('IR Manager not available')) {
+            Alert.alert('Infrarouge non supporté', 'Votre appareil ne possède pas d\'émetteur infrarouge ou l\'accès est refusé.');
+        } else {
+            console.error('Erreur de commande:', e);
+        }
     }
   };
 

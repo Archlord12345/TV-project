@@ -1,6 +1,6 @@
 import { BleManager, Device } from 'react-native-ble-plx';
 import IRManager from 'react-native-ir-manager';
-import { Platform, PermissionsAndroid, Alert } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
 
 /**
  * Modes de connexion supportés par l'application.
@@ -63,9 +63,15 @@ class RemoteService {
   async scanAndConnect(onDeviceFound?: (device: Device) => void): Promise<void> {
     console.log('Démarrage du scan Bluetooth...');
     
+    // On arrête tout scan en cours avant d'en lancer un nouveau
+    this.bleManager.stopDeviceScan();
+
     this.bleManager.startDeviceScan(null, null, (error, device) => {
       if (error) {
-        console.error('Erreur de scan:', error);
+        // On ignore l'erreur d'annulation de scan qui est normale
+        if (error.errorCode !== 2) {
+            console.error('Erreur de scan:', error);
+        }
         return;
       }
 
@@ -86,13 +92,28 @@ class RemoteService {
    */
   async connectToDevice(device: Device): Promise<boolean> {
     try {
+      // Si l'appareil est déjà celui auquel on est connecté, on s'arrête là
+      if (this.connectedDevice && this.connectedDevice.id === device.id) {
+        const isConnected = await device.isConnected();
+        if (isConnected) {
+            console.log(`Déjà connecté à ${device.name}`);
+            return true;
+        }
+      }
+
       this.bleManager.stopDeviceScan();
+      
       const connected = await device.connect();
       const discovered = await connected.discoverAllServicesAndCharacteristics();
       this.connectedDevice = discovered;
       console.log(`Connecté à ${device.name}`);
       return true;
-    } catch (e) {
+    } catch (e: any) {
+      // On gère le cas "already connected" proprement
+      if (e.message?.includes('already connected')) {
+          this.connectedDevice = device;
+          return true;
+      }
       console.error('La connexion a échoué', e);
       return false;
     }
@@ -139,19 +160,32 @@ class RemoteService {
 
       await IRManager.transmit(38000, pattern);
       console.log(`[IR] Motif transmis pour : ${command}`);
-    } catch (e) {
-      console.error("L'envoi IR a échoué", e);
+    } catch (e: any) {
+      throw e; // On remonte l'erreur pour la gérer dans l'UI
     }
   }
 
   /**
-   * Récupère les motifs de signaux IR (Exemple Samsung).
+   * Récupère les motifs de signaux IR (Exemples Samsung/Standards).
    */
   private getIRPattern(command: string): number[] {
+    const commonPattern = [560, 560, 560, 1690, 560, 560, 560, 560]; // Motif générique de remplissage
+    
     const patterns: Record<string, number[]> = {
       'POWER': [4500, 4500, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 1690, 560, 1690, 560, 1690, 560, 4500],
       'VOL_UP': [4500, 4500, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 1690, 560, 1690, 560, 4500],
       'VOL_DOWN': [4500, 4500, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 1690, 560, 4500],
+      'OK': [4500, 4500, 560, 560, 560, 1690, 560, 560, ...commonPattern],
+      'UP': [4500, 4500, 560, 1690, 560, 560, 560, 1690, ...commonPattern],
+      'DOWN': [4500, 4500, 560, 560, 560, 560, 560, 1690, ...commonPattern],
+      'LEFT': [4500, 4500, 560, 1690, 1690, 560, 560, 560, ...commonPattern],
+      'RIGHT': [4500, 4500, 1690, 560, 560, 1690, 560, 560, ...commonPattern],
+      'MENU': [4500, 4500, 560, 560, 1690, 1690, 560, 560, ...commonPattern],
+      'HOME': [4500, 4500, 1690, 1690, 560, 560, 560, 1690, ...commonPattern],
+      'BACK': [4500, 4500, 560, 1690, 560, 560, 1690, 1690, ...commonPattern],
+      'MUTE': [4500, 4500, 1690, 560, 1690, 560, 560, 560, ...commonPattern],
+      'CH_UP': [4500, 4500, 560, 560, 560, 1690, 1690, 560, ...commonPattern],
+      'CH_DOWN': [4500, 4500, 1690, 1690, 560, 560, 560, 560, ...commonPattern],
     };
 
     return patterns[command] || [];
