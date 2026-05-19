@@ -7,13 +7,11 @@ import {
   StatusBar,
   ScrollView,
   Alert,
-  FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Device } from 'react-native-ble-plx';
 import { 
   Power, 
-  Volume2, 
   VolumeX, 
   ChevronUp, 
   ChevronDown, 

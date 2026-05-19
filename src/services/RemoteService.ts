@@ -172,8 +172,71 @@ class RemoteService {
       console.warn('Aucun appareil Bluetooth connecté');
       return;
     }
+
     console.log(`[BT] Envoi de la commande : ${command}`);
-    // Ici, on écrirait normalement dans une caractéristique GATT spécifique.
+
+    try {
+      // 1. Découverte des services et caractéristiques si ce n'est pas déjà fait
+      const services = await this.connectedDevice.services();
+      
+      // On cherche une caractéristique writable
+      // Priorité au service HID (0x1812) et caractéristique Report (0x2A4D)
+      let targetChar: any = null;
+
+      for (const service of services) {
+        const chars = await service.characteristics();
+        for (const char of chars) {
+          // Si on trouve une caractéristique HID Report, on la prend
+          if (char.uuid.toLowerCase().includes('2a4d')) {
+            targetChar = char;
+            break;
+          }
+          // Sinon, on prend la première qui permet l'écriture
+          if (!targetChar && (char.isWritableWithResponse || char.isWritableWithoutResponse)) {
+            targetChar = char;
+          }
+        }
+        if (targetChar && targetChar.uuid.toLowerCase().includes('2a4d')) break;
+      }
+
+      if (!targetChar) {
+        throw new Error('Aucune caractéristique compatible trouvée pour l\'envoi de commandes');
+      }
+
+      // 2. Encodage de la commande
+      // Note : Chaque constructeur a son propre protocole.
+      // Pour une démo fonctionnelle, on envoie la chaîne en Base64 ou un octet de contrôle.
+      const payload = this.getBluetoothPayload(command);
+      
+      if (targetChar.isWritableWithoutResponse) {
+        await targetChar.writeWithoutResponse(payload);
+      } else {
+        await targetChar.writeWithResponse(payload);
+      }
+      
+      console.log(`[BT] Commande ${command} envoyée avec succès via ${targetChar.uuid}`);
+    } catch (e) {
+      console.error('[BT] Échec de l\'envoi de la commande:', e);
+      throw e;
+    }
+  }
+
+  /**
+   * Encode une commande pour le Bluetooth (Base64).
+   */
+  private getBluetoothPayload(command: string): string {
+    // Mapping simple pour la démo. En production, cela dépend du protocole de la TV.
+    const commandMap: Record<string, string> = {
+      'POWER': 'AQ==', // 0x01
+      'VOL_UP': 'Ag==', // 0x02
+      'VOL_DOWN': 'Aw==', // 0x03
+      'OK': 'BA==', // 0x04
+      'UP': 'BQ==',
+      'DOWN': 'Bg==',
+      'LEFT': 'Bw==',
+      'RIGHT': 'CA==',
+    };
+    return commandMap[command] || 'AA==';
   }
 
   // --- Logique Infrarouge (IR) ---
@@ -185,7 +248,7 @@ class RemoteService {
     if (Platform.OS !== 'android') return false;
     try {
       return await IRManager.hasIrEmitter();
-    } catch (e) {
+    } catch {
       return false;
     }
   }
@@ -214,23 +277,46 @@ class RemoteService {
    * Récupère les motifs de signaux IR (Exemples Samsung/Standards).
    */
   private getIRPattern(command: string): number[] {
-    const commonPattern = [560, 560, 560, 1690, 560, 560, 560, 560]; // Motif générique de remplissage
-    
+    // Protocole Samsung : Header (4500, 4500), Bit 0 (560, 560), Bit 1 (560, 1690)
+    const S_HDR = [4500, 4500];
+    const S_0 = [560, 560];
+    const S_1 = [560, 1690];
+    const S_FOOTER = [560, 4500];
+
+    // Protocole NEC (LG/Sony/Autres) : Header (9000, 4500), Bit 0 (560, 560), Bit 1 (560, 1690)
+    const N_HDR = [9000, 4500];
+
+    // Helper pour construire un motif à partir d'une valeur hexadécimale (32 bits)
+    const buildPattern = (hex: number, type: 'SAMSUNG' | 'NEC' = 'SAMSUNG') => {
+      let p = [...(type === 'SAMSUNG' ? S_HDR : N_HDR)];
+      for (let i = 31; i >= 0; i--) {
+        /* eslint-disable no-bitwise */
+        p.push(...((hex >> i) & 1 ? S_1 : S_0));
+        /* eslint-enable no-bitwise */
+      }
+      p.push(...S_FOOTER);
+      return p;
+    };
+
     const patterns: Record<string, number[]> = {
-      'POWER': [4500, 4500, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 1690, 560, 1690, 560, 1690, 560, 4500],
-      'VOL_UP': [4500, 4500, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 1690, 560, 1690, 560, 4500],
-      'VOL_DOWN': [4500, 4500, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 560, 1690, 560, 560, 560, 560, 560, 1690, 560, 1690, 560, 1690, 560, 1690, 560, 4500],
-      'OK': [4500, 4500, 560, 560, 560, 1690, 560, 560, ...commonPattern],
-      'UP': [4500, 4500, 560, 1690, 560, 560, 560, 1690, ...commonPattern],
-      'DOWN': [4500, 4500, 560, 560, 560, 560, 560, 1690, ...commonPattern],
-      'LEFT': [4500, 4500, 560, 1690, 1690, 560, 560, 560, ...commonPattern],
-      'RIGHT': [4500, 4500, 1690, 560, 560, 1690, 560, 560, ...commonPattern],
-      'MENU': [4500, 4500, 560, 560, 1690, 1690, 560, 560, ...commonPattern],
-      'HOME': [4500, 4500, 1690, 1690, 560, 560, 560, 1690, ...commonPattern],
-      'BACK': [4500, 4500, 560, 1690, 560, 560, 1690, 1690, ...commonPattern],
-      'MUTE': [4500, 4500, 1690, 560, 1690, 560, 560, 560, ...commonPattern],
-      'CH_UP': [4500, 4500, 560, 560, 560, 1690, 1690, 560, ...commonPattern],
-      'CH_DOWN': [4500, 4500, 1690, 1690, 560, 560, 560, 560, ...commonPattern],
+      // Samsung Standard (Address 0x0707)
+      'POWER': buildPattern(0xE0E040BF),
+      'VOL_UP': buildPattern(0xE0E0E01F),
+      'VOL_DOWN': buildPattern(0xE0E0D02F),
+      'CH_UP': buildPattern(0xE0E048B7),
+      'CH_DOWN': buildPattern(0xE0E008F7),
+      'OK': buildPattern(0xE0E016E9),
+      'UP': buildPattern(0xE0E006F9),
+      'DOWN': buildPattern(0xE0E08679),
+      'LEFT': buildPattern(0xE0E0A659),
+      'RIGHT': buildPattern(0xE0E046B9),
+      'MENU': buildPattern(0xE0E058A7),
+      'HOME': buildPattern(0xE0E018E7),
+      'BACK': buildPattern(0xE0E01AE5),
+      'MUTE': buildPattern(0xE0E0F00F),
+      
+      // LG/NEC Standard (Exemple pour extension future)
+      'LG_POWER': buildPattern(0x20DF10EF, 'NEC'),
     };
 
     return patterns[command] || [];
