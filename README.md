@@ -20,7 +20,17 @@ Ce projet s'appuie sur une pile technologique moderne pour garantir performance,
 *   **patch-package** : Automatisation et gestion des correctifs natifs de compatibilité au sein de `node_modules` (compatibilité Gradle 8+).
 *   **ESLint & Prettier** : Outils complémentaires d'assurance qualité et d'uniformisation du code.
 *   **Babel & Metro Bundler** : Chaîne d'outils de transpilation et de build pour l'écosystème JavaScript/React Native.
+*   **Jest** : Framework de tests unitaires pour garantir la stabilité des algorithmes de génération de signaux.
 *   **GitHub Actions** : Workflow CI/CD optimisé avec mise en cache intelligente pour des builds plus rapides.
+
+## 📺 Écrans et Appareils Supportés
+
+L'application est conçue pour une compatibilité maximale avec divers types de technologies d'affichage :
+
+- **Types d'écrans** : Compatible avec les technologies **LED, LCD, OLED, QLED et Plasma**.
+- **Marques (Infrarouge)** : Support natif des protocoles **Samsung, LG, Sony, Panasonic**, et bien d'autres via le standard NEC.
+- **Smart TVs (Bluetooth)** : Compatible avec toutes les TVs supportant le profil **Bluetooth HID** (Android TV, Apple TV, WebOS, Tizen, Fire TV).
+- **Appareils Mobiles** : Nécessite un smartphone Android avec émetteur IR intégré pour le mode Infrarouge. Le mode Bluetooth est disponible sur iOS et Android.
 
 ## 📂 Architecture et Fonctions Clés
 
